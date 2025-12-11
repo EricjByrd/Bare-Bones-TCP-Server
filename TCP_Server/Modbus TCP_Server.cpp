@@ -24,16 +24,19 @@ void modbusReadRegister(SOCKET clientSocket ,char buffer[]) {
     buffer[5] = wordSize + 3;
     buffer[8] = (uint8_t)(wordSize);
     buffer[9] = 0x00; //low byte of first register (empty)
-	buffer[10] = 0x02; //low byte of first register (empty)
+	buffer[10] = 0x03; //low byte of first register (empty)
     buffer[11] = 0x00; //low byte of first register (empty)
     buffer[12] = 0x02; //low byte of second register
-    //buffer[13] = 0x00; //low byte of first register (empty)
+    buffer[13] = 0x00; //low byte of first register (empty)
     //buffer[14] = 0x02; //low byte of third register
     //5. Overwrite the existing request packet from byte 8 onwards with response:
         //a. Byte 8: Byte Count (Word Size from step 4)
         //b. Byte 9: First register's high byte (empty)
         //c. Byte 10: First register's low byte
         //d. etc
+    for (int i = 0; i < wordSize + 9; i++) {
+		printf("Response Packet: %02X\n", (unsigned char)buffer[i]);
+	}
      send(clientSocket, buffer, wordSize + 9, 0);
 }
 
@@ -51,10 +54,6 @@ void modbusRequest(SOCKET clientSocket, char buffer[], size_t size)
             //bytesReceived then becomes bytes received + result so
             //0 becomes 1, 3, 5, etc until we hit 6.
             result = recv(clientSocket, buffer + bytesReceived, 6 - bytesReceived, 0);
-            if (result <= 0) {
-                closesocket(clientSocket);
-                return;
-            }
             bytesReceived += result;
             for (int i = 0; i < bytesReceived; i++) {
                 printf("Bytes received: %02X\n", (unsigned char)buffer[i]);
@@ -68,26 +67,24 @@ void modbusRequest(SOCKET clientSocket, char buffer[], size_t size)
         printf("Expected size: %d\n", expectedSize);
         
         //Now continue receiving until expected size is met.
-        while (bytesReceived < expectedSize) {
+        while (result < expectedSize) {
             printf("Bytes Received: %d\n", bytesReceived);
             printf("Expected size: %d\n", expectedSize);
             //we receive data into buffer + 6.
             //expected size before 12 - 6
-            result = recv(clientSocket, buffer + bytesReceived, expectedSize - bytesReceived, 0);
-            if (result <= 0) {
-                closesocket(clientSocket);
-                return;
-            }
+            result = recv(clientSocket, buffer + bytesReceived, expectedSize, 0);
             bytesReceived += result;
             printf("Result: %d", result);
             if (result > 0) {
                 printf("\nexpected size: %d\n", expectedSize);
                 printf("\nexpected size: %d\n", result);
+				modbusReadRegister(clientSocket, buffer);
                 //just printing buffer for testing purposes
                 printf("Message from client: %d\n", result);
                 for (int i = bytesReceived - result; i < bytesReceived; i++) {
                     printf("%02X\n", (unsigned char)buffer[i]);
                 }
+                bytesReceived = 0;
             }
             else if (result == 0) {
                 printf("Client disconnected.\n");
@@ -99,10 +96,8 @@ void modbusRequest(SOCKET clientSocket, char buffer[], size_t size)
                 closesocket(clientSocket);
                 return;
             }
-        } 
-        modbusReadRegister(clientSocket, buffer);
-        bytesReceived = 0; 
-    } while (1);
+        } bytesReceived = 0;
+    } while (result > 0);
 }
 int main()
 {
