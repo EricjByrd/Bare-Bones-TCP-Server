@@ -8,36 +8,83 @@
 #define SERVER_PORT 8081
 #pragma comment(lib, "Ws2_32.lib")
 
-void modbusReadRegister(SOCKET clientSocket ,char buffer[]) {
-	//1. Take an existing request packet (12 bytes)
+void modbusReadRegister(SOCKET clientSocket, char buffer[]) {
+    //We've received a request to Read a Register
+    //Anatomy of the MbsByteArray[], our initial request from Modbus Master.
+    // Byte | Value (hex) | Meaning
+    // -----------MBAP Header Starts Here-----------------------------------------------
+    // -----|------------|--------------------------------------------
+    //  0 | 0x00  | Transaction ID High Byte(any number, identifies request/response)
+    //  1 | 0x01  | Transaction ID Low Byte(any number, identifies request/response)
+    //  2 | 0x00  | Protocol ID High Byte (0x0000 for Modbus TCP)
+    //  3 | 0x00  | Protocol ID Low Byte (0x0000 for Modbus TCP)
+    //  4 | 0x00  | Length of remaining bytes High Byte (Unit ID + Function + Data)
+    //  5 | 0x06  | Length of remaining bytes Low Byte (Unit ID + Function + Data)                     
+    //  6 | 0x01  | Unit ID (Modbus slave address)
+    //-------------MBAP Header Stops here-----------------------------------------------
+    //  7   | 0x03       | Function Code (0x03 = Read Holding Registers)
+    //  8   | 0x00 0x00  | Starting Address High byte
+    //  9   | 0x00 0x00  | Starting Address Low byte
+    //  10  | 0x00 0x02  | Quantity of Registers High byte
+    //  11  | 0x00 0x02  | Quantity of Registers Low byte
+    //... additional bytes may follow for other function codes
+
+    //The anatomy of MbData (Slave's response to the Master):
+    // Byte | Value (hex) | Meaning
+    // -----|------------|--------------------------------------
+    // -----------MBAP Header Starts Here-----------------------------------------------
+    //  0 | 0x00 0x01  | Transaction ID High Byte(any number, identifies request/response)
+    //  1 | 0x00 0x01  | Transaction ID Low Byte(any number, identifies request/response)
+    //  2 | 0x00 0x00  | Protocol ID High Byte (0x0000 for Modbus TCP)
+    //  3 | 0x00 0x00  | Protocol ID Low Byte (0x0000 for Modbus TCP)
+    //  4 | 0x00 0x06  | Length of remaining bytes High Byte (Unit ID + Function + Data)
+    //  5 | 0x00 0x06  | Length of remaining bytes Low Byte (Unit ID + Function + Data)                     
+    //  6 | 0x01       | Unit ID (Modbus slave address)
+    //-------------MBAP Header Stops here-----------------------------------------------
+    //  7   | 0x03       | Function Code (0x03 = Read Holding Registers)
+    //-------------The data below this is what is overwritten in MbsByteArray starting at index [8] and send to the Master----------------
+    //  8   | 0x00 0x00  | Byte Count
+    //  9   | ...        | First Register Data High byte
+    // 10   | ...        | First Register Data Low byte
+    // 11   | ...        | Second Register Data High byte
+    // 12   | ...        | Second Register Data Low byte
+    // etc.. additional Register Data (if more than 2 registers requested)
+        //1. Take an existing request packet (12 bytes)
     uint8_t startAddressHigh = (unsigned char)buffer[8];
     uint8_t startAddressLow = (unsigned char)buffer[9];
+
     //2. Take bytes 8 and 9 (Starting Address)
     uint16_t startAddress = ((startAddressHigh << 8) | startAddressLow);
-	printf("Starting Address: %d\n", startAddress);
+    printf("Starting Address: %d\n", startAddress);
+
     //3. Read the number of registers requested from bytes 10 and 11
     uint8_t numRegistersHigh = (unsigned char)buffer[10];
     uint8_t numRegistersLow = (unsigned char)buffer[11];
     uint16_t numRegisters = ((numRegistersHigh << 8) | numRegistersLow);
+
     //4. Multiply that value from elements 10 and 11 by 2. Call that the Word size (amount of bytes to read)
-    uint16_t wordSize = numRegisters * 2;
-    buffer[5] = wordSize + 3;
-    buffer[8] = (uint8_t)(wordSize);
+    uint16_t byteCount = numRegisters * 2;
+    uint16_t numBytes = byteCount + 3;
+    uint8_t hsbnumBytes = numBytes >> 8;
+    uint8_t lsbnumBytes = numBytes & 0x00FF;
+    buffer[4] = hsbnumBytes;
+    buffer[5] = lsbnumBytes;
+    buffer[8] = byteCount;
     buffer[9] = 0x00; //low byte of first register (empty)
-	buffer[10] = 0x03; //low byte of first register (empty)
+    buffer[10] = 0x03; //low byte of first register (empty)
     buffer[11] = 0x00; //low byte of first register (empty)
     buffer[12] = 0x02; //low byte of second register
-    buffer[13] = 0x00; //low byte of first register (empty)
+    //buffer[13] = 0x00; //low byte of first register (empty)
     //buffer[14] = 0x02; //low byte of third register
     //5. Overwrite the existing request packet from byte 8 onwards with response:
         //a. Byte 8: Byte Count (Word Size from step 4)
         //b. Byte 9: First register's high byte (empty)
         //c. Byte 10: First register's low byte
         //d. etc
-    for (int i = 0; i < wordSize + 9; i++) {
-		printf("Response Packet: %02X\n", (unsigned char)buffer[i]);
-	}
-     send(clientSocket, buffer, wordSize + 9, 0);
+    for (int i = 0; i < byteCount + 9; i++) {
+        printf("Response Packet: %02X\n", (unsigned char)buffer[i]);
+    }
+    send(clientSocket, buffer, byteCount + 9, 0);
 }
 
 void modbusRequest(SOCKET clientSocket, char buffer[], size_t size)
@@ -65,7 +112,7 @@ void modbusRequest(SOCKET clientSocket, char buffer[], size_t size)
 
         printf("Bytes Received: %d\n", bytesReceived);
         printf("Expected size: %d\n", expectedSize);
-        
+
         //Now continue receiving until expected size is met.
         while (result < expectedSize) {
             printf("Bytes Received: %d\n", bytesReceived);
@@ -78,11 +125,11 @@ void modbusRequest(SOCKET clientSocket, char buffer[], size_t size)
             if (result > 0) {
                 printf("\nexpected size: %d\n", expectedSize);
                 printf("\nexpected size: %d\n", result);
-				modbusReadRegister(clientSocket, buffer);
+                modbusReadRegister(clientSocket, buffer);
                 //just printing buffer for testing purposes
                 printf("Message from client: %d\n", result);
-                for (int i = bytesReceived - result; i < bytesReceived; i++) {
-                    printf("%02X\n", (unsigned char)buffer[i]);
+                for (int i = 0; i < bytesReceived; i++) {
+                    printf("Response :%02X\n", (unsigned char)buffer[i]);
                 }
                 bytesReceived = 0;
             }
